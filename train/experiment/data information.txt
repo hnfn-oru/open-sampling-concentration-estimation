@@ -1,0 +1,47 @@
+In the folder "Raw Sensor Data" you will find the raw data for training, testing and validation in .csv format.
+In each file the time, place, wind speed and sensor response of the MICS5524 (MOX) and PID sensors is given.
+ 
+There are four sensors stuck on top of each other at different heights, these are called the sensor layers (0 to 3).
+The sensor layer that takes the measurements is given in the file name. For the MOX sensors, each sensor needs to be calibrated seperately.
+Therefore the "clean air" data is given, in which the sensor response in clean air is recorded.
+
+Ground truth source position:
+The ground truth position for the source in the training data set is: x=0.675, y=0.336, z=0.179. 
+
+
+The /train folder includes the raw data sorted into:
+	- /experiment: raw data of the experiments and each sensor layer
+	- /upstream: raw data of the upstream sensors in the foreland region, this is helpful to measure the increasing
+	  background concentration of the emitted gas. The two sensors show different background concentration at times.
+	- /test: data taken from random, not sequential points in space for testing. The selected points are weighted, so that 70 % of the points 
+	  are in the plume. Each file contains the data point from one layer and the information of the 150 (15 seconds) prevoius time steps, 
+	  and 150 (15 seconds) following time steps. It contains a 100 batches with each 500 selected points.
+	- /clean: measurements taken in clean air (no gas was being released) to calibrate the MOX sensors. The sensors where not moving during the measurements.
+	  It contains data taken for 17 minutes.
+
+The /validation folder contains the raw data sorted into:
+	- /upstream: raw data of the upstream sensors in the foreland region, this is helful to measure the increasing
+	  background concentration of the emitted gas. The two sensors show different background concentration at times.
+	- /test: data taken from random, not sequential points in space for testing. The selected points are weighted, so that 70 % of the points 
+	  are in the plume. Each file contains the data point from one layer and the information of the 150 (15 seconds) previous time steps, 
+	  and 150 (15 seconds) following time steps. It contains a 100 batches with each 500 selected points.
+	- /clean: measurements taken in clean air (no gas was being released) to calibrate the MOX sensors. The sensors where not moving during the measurements.
+	  It contains data taken for 17 minutes.
+
+Definition of the text boxes in the csv files:
+	- time: moment of time at which the measurement was taken in the format YYYY-MM-DD XX:XX:XX.XXXXXX. The step size is about 0.1 seconds.
+	- x, y, z: location at which the measurement was taken. Z-position has a 2.5 cm offset to the floor, which is included in z.
+	  When the sensors are moving to the next cell, no x,y,z coordinates are given.
+	- MiCS5524: sensor response in voltage. 
+	- PID-sensor: sensor response in voltage. 
+	- wind-u, wind-v, wind-w: wind speed at the measurement point in m/s. The measurements taken while the sensors are moving should be taken with caution.  
+	- x_reported, y_reported, z_reported: location at which the measurement was taken. Z-reported does not include the 2.5 cm offset.
+
+Data Visualization:
+	the python file "visualize_train_experiment.py" takes the /train/experiment and plots the data of one sensor-type in one layer
+	in a 3D image with slider. The slider can be moved in x-direction to have a view of each measurement point in the room.
+ 	To visualize the /train/test use "visualize_test.py". The path of a test file can be inserted and it will plot the voltage as a functino of time.
+
+Sensor information:
+	- MiCS-5524: https://www.sgxsensortech.com/content/uploads/2014/07/1084_Datasheet-MiCS-5524-rev-8.pdf
+	- PID-AH2 Photo Ionisation Detector: https://ametekcdn.azureedge.net/mediafiles/project/oneweb/oneweb/alphasense/products/datasheets/alphasense_pid-ah2_datasheet_en_1.pdf?revision:bf5b3e8a-c6a3-4608-ae2e-b3b91032485b
