@@ -67,46 +67,63 @@ X_test  = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 ###############################################################
 # Step 2: Define the LSTM Model Training Function for Bayesian Optimization
 ###############################################################
-def train_lstm_model(units, learning_rate, batch_size):
+def train_lstm_model(num_layers, units, learning_rate, batch_size):
     """
-    Build and train an LSTM model using specified hyperparameters, and return the negative
-    Mean Squared Error (MSE) on the testing set. The negative MSE is returned since the 
-    Bayesian optimization routine maximizes the objective, so minimizing MSE is achieved by
-    maximizing its negative value.
+    Build and train an LSTM model with a variable number of layers.
+    Returns the negative MSE on the test data for Bayesian optimization.
     
     Parameters:
-      - units (float): Number of units in the LSTM layer. This value is converted to int.
+      - num_layers (float): Number of LSTM layers (will be cast to int). 
+                            Should be at least 1.
+      - units (float): Number of units in each LSTM layer (cast to int).
       - learning_rate (float): Learning rate for the Adam optimizer.
-      - batch_size (float): Batch size for model training. Also converted to int.
+      - batch_size (float): Batch size for model training (cast to int).
       
     Returns:
-      - Negative validation loss (MSE) measured on the test set.
+      - Negative validation loss (MSE) on the test set.
     """
-    # Convert hyperparameters that must be integers to int type.
+    # Convert hyperparameters that must be integers
+    num_layers = int(num_layers)
     units = int(units)
     batch_size = int(batch_size)
     
-    # Create the LSTM model using the Sequential API.
-    # Input shape is set to (time_steps, features), where time_steps = X_train.shape[1] (should be 80)
-    # and features = X_train.shape[2] (which is 1 after reshaping).
-    model = Sequential([
-        LSTM(units, input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=False),
-        Dense(1)  # Single neuron output for a regression task.
-    ])
+    # Create a Sequential model instance
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense
+    from tensorflow.keras.optimizers import Adam
     
-    # Compile the model using the Adam optimizer and Mean Squared Error loss.
-    optimizer = Adam(learning_rate=learning_rate)
-    model.compile(optimizer=optimizer, loss='mse')
+    model = Sequential()
     
-    # Train the model on the training data for a fixed number of epochs (here 10).
-    # Note: The batch_size is one of the variables to be optimized.
+    # Build the LSTM layers based on the number of layers specified
+    # If there is more than one layer, we need to set return_sequences=True for all but the last LSTM layer.
+    if num_layers > 1:
+        # First LSTM layer with input shape and return sequences (because more layers follow)
+        model.add(LSTM(units, input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=True))
+        # Add intermediate layers (if any) with return_sequences=True
+        for _ in range(1, num_layers - 1):
+            model.add(LSTM(units, return_sequences=True))
+        # Add the final LSTM layer without returning full sequences
+        model.add(LSTM(units, return_sequences=False))
+    else:
+        # If only one layer is used, simply add a single LSTM layer
+        model.add(LSTM(units, input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=False))
+    
+    # Add the Dense output layer for regression (single output value)
+    model.add(Dense(1))
+    
+    # Compile the model with the Adam optimizer and using Mean Squared Error loss.
+    optimizer_obj = Adam(learning_rate=learning_rate)
+    model.compile(optimizer=optimizer_obj, loss='mse')
+    
+    # Train the model on the training data; here we use 10 epochs for the optimization phase.
     model.fit(X_train, y_train, epochs=10, batch_size=batch_size, verbose=0)
     
-    # Evaluate the model on the testing data to obtain validation loss.
+    # Evaluate the model on the test data and get the loss value.
     val_loss = model.evaluate(X_test, y_test, verbose=0)
     
-    # Return the negative validation loss. Bayesian Optimization will try to maximize this value.
+    # Return the negative loss as Bayesian optimization maximizes the objective.
     return -val_loss
+
 
 ###############################################################
 # Step 3: Hyperparameter Tuning Using Bayesian Optimization
@@ -116,16 +133,17 @@ def train_lstm_model(units, learning_rate, batch_size):
 # 'learning_rate' is the step size for the optimizer,
 # and 'batch_size' determines how many samples are processed before updating the model weights.
 pbounds = {
-    'units': (10, 100),           # LSTM units range from 10 to 100.
-    'learning_rate': (1e-4, 1e-2),  # Learning rate between 0.0001 and 0.01.
-    'batch_size': (16, 128)         # Batch size between 16 and 128.
+    'num_layers': (1, 3),          # For example, search for 1 to 3 LSTM layers
+    'units': (10, 100),            # Number of LSTM units
+    'learning_rate': (1e-4, 1e-2),   # Learning rate
+    'batch_size': (16, 128)        # Batch size
 }
 
 # Initialize the Bayesian Optimization process with the training function and search bounds.
 optimizer = BayesianOptimization(
     f=train_lstm_model,
     pbounds=pbounds,
-    random_state=42  # Set random_state for reproducibility.
+    random_state=42
 )
 
 # Perform the Bayesian Optimization:
@@ -146,24 +164,39 @@ best_batch_size = int(best_params['batch_size'])
 ###############################################################
 # Step 4: Build and Train the Final Model Using the Best Hyperparameters
 ###############################################################
-def build_final_model(input_shape, units, learning_rate):
+def build_lstm_model(num_layers, units, input_shape, learning_rate):
     """
-    Create and compile the final LSTM model using the best hyperparameters.
-    
+    Builds an LSTM model with a variable number of layers.
+
     Parameters:
-      - input_shape (tuple): Shape of the input data (time_steps, features).
-      - units (int): The number of LSTM units.
-      - learning_rate (float): Learning rate for the optimizer.
-      
+    - num_layers (int): Number of LSTM layers to stack.
+    - units (int): Number of units in each LSTM layer.
+    - input_shape (tuple): Shape of the input data (time_steps, features).
+    - learning_rate (float): Learning rate for the optimizer.
+
     Returns:
-      - model: A compiled Keras Sequential model ready for training.
+    - model: A compiled Keras Sequential model.
     """
-    model = Sequential([
-        LSTM(units, input_shape=input_shape, return_sequences=False),
-        Dense(1)  # Output layer for regression.
-    ])
+    model = Sequential()
+    
+    # Add the first LSTM layer with the specified input shape.
+    # If more layers are planned, set return_sequences=True to pass the full sequence to the next layer.
+    if num_layers > 1:
+        model.add(LSTM(units, input_shape=input_shape, return_sequences=True))
+        # Add intermediate LSTM layers (if any)
+        for _ in range(1, num_layers - 1):
+            model.add(LSTM(units, return_sequences=True))
+        # Last LSTM layer does not need to output the full sequence.
+        model.add(LSTM(units, return_sequences=False))
+    else:
+        # Single LSTM layer.
+        model.add(LSTM(units, input_shape=input_shape, return_sequences=False))
+    
+    # Output layer for regression
+    model.add(Dense(1))
     model.compile(optimizer=Adam(learning_rate=learning_rate), loss='mse')
     return model
+
 
 # Build the final model using the shape of the training data and the best hyperparameters.
 final_model = build_final_model((X_train.shape[1], X_train.shape[2]), best_units, best_learning_rate)
