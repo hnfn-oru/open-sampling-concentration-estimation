@@ -2,136 +2,111 @@
 """
 Created on Thu Apr 10 11:20:30 2025
 
-Author: fanha
-
-This script demonstrates how to:
-    1. Load and preprocess sensor data using a custom data processor.
-    2. Define an LSTM model training function that will be optimized using Bayesian Optimization.
-    3. Tune key hyperparameters (LSTM units, learning rate, and batch size) with Bayesian optimization.
-    4. Build and train the final LSTM model using the best hyperparameters.
-    5. Evaluate the final model's performance and visualize the predictions.
+@author: fanha
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
-
-# Import necessary components from Keras for model building, training, and optimization.
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from tensorflow.keras.optimizers import Adam
-
-# Import mean squared error (MSE) calculation from scikit-learn for performance evaluation.
 from sklearn.metrics import mean_squared_error
-
-# Import the BayesianOptimization class for hyperparameter tuning.
 from bayes_opt import BayesianOptimization
 
-# Import the custom sensor data processing class.
+# 导入自定义数据处理类
 from LST_SensorDataProcessor import SensorDataProcessor
 
 ###############################################################
-# Step 1: Data Loading and Preprocessing
+# Step 1: 数据加载与预处理
 ###############################################################
-# Initialize the SensorDataProcessor with the base directory path containing the data.
+# 初始化处理器，指定数据基础路径
 processor = SensorDataProcessor(base_path="train/experiment")
 
-# Retrieve the regression data from a sensor; the implementation of this function
-# should load and possibly preprocess raw sensor data for a regression task.
+# 获取传感器回归数据和目标数据（这两个函数依据您的实际需求进行实现）
 data4reg = processor.prepare_regression_data(sensor_type='MiCS5524', num_layers=4)
-
-# Retrieve the target data for the sensor. This might be data from another sensor or
-# the ground truth values that are used as targets in the regression.
 data4target = processor.prepare_target_data(sensor_type='PID-sensor', num_layers=4)
 
-# Use the custom processor to prepare the training and testing datasets.
-# The following function splits the data based on a specified training portion, 
-# sets the sequence length (seq_len) for time series sequences (80 time steps in this case),
-# and selects the target layer (layer index 0 in this example).
+# 根据传感器数据生成训练和测试数据集，并设置序列长度（seq_len）为80
+# 其中 X 数据的初始形状为 (样本数, 80) ，y 数据为一维数组 (样本数,)
 X_train, X_test, y_train, y_test = processor.prepare_training_data(
     data4reg, data4target, train_portion=0.8, seq_len=80, target_layer=0
 )
 
-# Print out the shapes of the generated training and testing sets to verify dimensions.
-# Expected shapes: Training: (num_train_samples, 80) for X_train and (num_train_samples,) for y_train;
-#                  Testing:  (num_test_samples, 80) for X_test and (num_test_samples,) for y_test.
+# 打印原始数据形状
 print("Training data shape:", X_train.shape, y_train.shape)
 print("Testing data shape:", X_test.shape, y_test.shape)
 
-# The LSTM model in Keras expects input data as a three-dimensional tensor with shape:
-#   (number_of_samples, time_steps, number_of_features)
-# Since X_train and X_test are currently 2D arrays with shape (samples, time_steps),
-# we need to add a third dimension, representing a single feature channel.
+# LSTM 模型要求输入数据为三维张量：(样本数, 时间步, 特征数)
+# 当前 X_train 和 X_test 为二维，需增加特征维度（此处特征数为1）
 X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
-X_test  = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 
 ###############################################################
-# Step 2: Define the LSTM Model Training Function for Bayesian Optimization
+# Step 2: 定义使用贝叶斯优化的 LSTM 训练函数
 ###############################################################
+from tensorflow.keras.layers import Input  # Ensure Input is imported
+
 def train_lstm_model(num_layers, units, learning_rate, batch_size):
     """
     Build and train an LSTM model with a variable number of layers.
-    Returns the negative MSE on the test data for Bayesian optimization.
-    
+    The function returns the negative Mean Squared Error (MSE) on the test set
+    for use in Bayesian Optimization. Using the negative MSE allows us to 
+    maximize performance during optimization.
+
     Parameters:
-      - num_layers (float): Number of LSTM layers (will be cast to int). 
-                            Should be at least 1.
-      - units (float): Number of units in each LSTM layer (cast to int).
+      - num_layers (float): Number of LSTM layers to stack. This value will be converted to int.
+      - units (float): Number of units in each LSTM layer (converted to int).
       - learning_rate (float): Learning rate for the Adam optimizer.
-      - batch_size (float): Batch size for model training (cast to int).
-      
+      - batch_size (float): Batch size for training (converted to int).
+
     Returns:
-      - Negative validation loss (MSE) on the test set.
+      - Negative validation loss (MSE) measured on the test set.
     """
-    # Convert hyperparameters that must be integers
+    # Convert hyperparameters that require integer values.
     num_layers = int(num_layers)
     units = int(units)
     batch_size = int(batch_size)
     
-    # Create a Sequential model instance
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import LSTM, Dense
-    from tensorflow.keras.optimizers import Adam
-    
+    # Build the Sequential model with an explicit input layer.
+    # X_train is assumed to be available in global scope with shape (samples, time_steps, features)
     model = Sequential()
-    
-    # Build the LSTM layers based on the number of layers specified
-    # If there is more than one layer, we need to set return_sequences=True for all but the last LSTM layer.
-    if num_layers > 1:
-        # First LSTM layer with input shape and return sequences (because more layers follow)
-        model.add(LSTM(units, input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=True))
-        # Add intermediate layers (if any) with return_sequences=True
-        for _ in range(1, num_layers - 1):
-            model.add(LSTM(units, return_sequences=True))
-        # Add the final LSTM layer without returning full sequences
+    model.add(Input(shape=(X_train.shape[1], X_train.shape[2])))
+
+    # Dynamically add LSTM layers based on the num_layers parameter.
+    # For multiple layers, intermediate layers need return_sequences=True.
+    if num_layers == 1:
+        # Only one LSTM layer: no need to return sequences.
         model.add(LSTM(units, return_sequences=False))
     else:
-        # If only one layer is used, simply add a single LSTM layer
-        model.add(LSTM(units, input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=False))
+        # Add the first LSTM layer with full sequence output.
+        model.add(LSTM(units, return_sequences=True))
+        # If more than two layers, add intermediate layers.
+        for _ in range(num_layers - 2):
+            model.add(LSTM(units, return_sequences=True))
+        # Add the final LSTM layer without returning sequences.
+        model.add(LSTM(units, return_sequences=False))
     
-    # Add the Dense output layer for regression (single output value)
+    # Add a Dense output layer with a single neuron for regression.
     model.add(Dense(1))
     
-    # Compile the model with the Adam optimizer and using Mean Squared Error loss.
-    optimizer_obj = Adam(learning_rate=learning_rate)
-    model.compile(optimizer=optimizer_obj, loss='mse')
+    # Compile the model with the Adam optimizer and Mean Squared Error as the loss function.
+    optimizer = Adam(learning_rate=learning_rate)
+    model.compile(optimizer=optimizer, loss='mse')
     
-    # Train the model on the training data; here we use 10 epochs for the optimization phase.
+    # Train the model using the training data.
+    # Here we use 10 epochs for training during optimization.
     model.fit(X_train, y_train, epochs=10, batch_size=batch_size, verbose=0)
     
-    # Evaluate the model on the test data and get the loss value.
+    # Evaluate the model on the test set and return negative loss for maximization.
     val_loss = model.evaluate(X_test, y_test, verbose=0)
-    
-    # Return the negative loss as Bayesian optimization maximizes the objective.
     return -val_loss
 
 
+
 ###############################################################
-# Step 3: Hyperparameter Tuning Using Bayesian Optimization
+# Step 3: 贝叶斯优化超参数调节
 ###############################################################
-# Define the search space for hyperparameters.
-# 'units' refers to the number of LSTM units,
-# 'learning_rate' is the step size for the optimizer,
-# and 'batch_size' determines how many samples are processed before updating the model weights.
+# 定义超参数搜索范围
 pbounds = {
     'num_layers': (1, 3),          # For example, search for 1 to 3 LSTM layers
     'units': (10, 100),            # Number of LSTM units
@@ -139,85 +114,91 @@ pbounds = {
     'batch_size': (16, 128)        # Batch size
 }
 
-# Initialize the Bayesian Optimization process with the training function and search bounds.
+# 初始化贝叶斯优化器
 optimizer = BayesianOptimization(
     f=train_lstm_model,
     pbounds=pbounds,
     random_state=42
 )
 
-# Perform the Bayesian Optimization:
-# 'init_points' specifies the number of random samples to explore at first,
-# 'n_iter' determines the number of optimization iterations.
+# 执行贝叶斯优化：初始采样5次，迭代10次（可根据需要调整）
 optimizer.maximize(init_points=5, n_iter=10)
 
-# Print out the best-found parameters and the associated optimization result.
+# 输出最佳超参数及结果
 print("Best parameters from Bayesian Optimization:")
 print(optimizer.max)
 
-# Retrieve and convert the best hyperparameters from the optimization result.
+# 提取最佳超参数
 best_params = optimizer.max['params']
 best_units = int(best_params['units'])
 best_learning_rate = best_params['learning_rate']
 best_batch_size = int(best_params['batch_size'])
 
 ###############################################################
-# Step 4: Build and Train the Final Model Using the Best Hyperparameters
+# Step 4: 构建并训练最终模型（使用最佳超参数）
 ###############################################################
-def build_lstm_model(num_layers, units, input_shape, learning_rate):
+# 定义构建最终模型的函数（与训练函数类似）
+
+def build_lstm_model(input_shape, num_layers, units, learning_rate):
     """
-    Builds an LSTM model with a variable number of layers.
-
+    Builds and compiles an LSTM model with a variable number of stacked LSTM layers.
+    The model starts with an explicit Input layer to define the input shape,
+    which avoids passing the input_shape directly to a layer and suppresses related warnings.
+    
     Parameters:
-    - num_layers (int): Number of LSTM layers to stack.
-    - units (int): Number of units in each LSTM layer.
-    - input_shape (tuple): Shape of the input data (time_steps, features).
-    - learning_rate (float): Learning rate for the optimizer.
-
+      - input_shape (tuple): The shape of the input data (time_steps, features), e.g., (80, 1).
+      - num_layers (int): Number of LSTM layers to be stacked.
+      - units (int): Number of units for each LSTM layer.
+      - learning_rate (float): Learning rate for the Adam optimizer.
+      
     Returns:
-    - model: A compiled Keras Sequential model.
+      - model: A compiled Keras Sequential model.
     """
     model = Sequential()
+    # Explicitly define the input shape using an Input layer.
+    model.add(Input(shape=input_shape))
     
-    # Add the first LSTM layer with the specified input shape.
-    # If more layers are planned, set return_sequences=True to pass the full sequence to the next layer.
-    if num_layers > 1:
-        model.add(LSTM(units, input_shape=input_shape, return_sequences=True))
-        # Add intermediate LSTM layers (if any)
-        for _ in range(1, num_layers - 1):
-            model.add(LSTM(units, return_sequences=True))
-        # Last LSTM layer does not need to output the full sequence.
+    # Dynamically add LSTM layers based on the num_layers parameter.
+    if num_layers == 1:
+        # For a single LSTM layer, no need to return sequences.
         model.add(LSTM(units, return_sequences=False))
     else:
-        # Single LSTM layer.
-        model.add(LSTM(units, input_shape=input_shape, return_sequences=False))
+        # For the first LSTM layer, output the full sequence for further processing.
+        model.add(LSTM(units, return_sequences=True))
+        # Add intermediate LSTM layers if num_layers > 2.
+        for _ in range(num_layers - 2):
+            model.add(LSTM(units, return_sequences=True))
+        # Add the final LSTM layer, which returns only the last output.
+        model.add(LSTM(units, return_sequences=False))
     
-    # Output layer for regression
+    # Add a Dense layer for the regression output.
     model.add(Dense(1))
+    
+    # Compile the model with the Adam optimizer and mean squared error loss.
     model.compile(optimizer=Adam(learning_rate=learning_rate), loss='mse')
+    
     return model
 
 
-# Build the final model using the shape of the training data and the best hyperparameters.
-final_model = build_final_model((X_train.shape[1], X_train.shape[2]), best_units, best_learning_rate)
 
-# Train the final model for a longer duration (20 epochs in this example) using the best batch size.
+# 构建最终模型
+final_model = build_lstm_model((X_train.shape[1], X_train.shape[2]), best_units, best_learning_rate)
+
+# 对最终模型进行较长时间训练（例如20个Epoch）
 final_model.fit(X_train, y_train, epochs=20, batch_size=best_batch_size, verbose=1)
 
 ###############################################################
-# Step 5: Model Evaluation and Results Visualization
+# Step 5: 模型评估与结果展示
 ###############################################################
-# Use the final model to generate predictions on the test data.
+# 在测试集上进行预测
 predictions = final_model.predict(X_test)
 
-# Compute the Mean Squared Error (MSE) between predictions and actual test values.
+# 计算均方误差（MSE）并求平方根得到 RMSE
 mse = mean_squared_error(y_test, predictions)
-
-# Calculate the Root Mean Squared Error (RMSE) for interpretability.
 rmse = np.sqrt(mse)
 print(f"Test RMSE: {rmse}")
 
-# Plot the actual vs. predicted values for visual comparison.
+# 绘制预测结果与实际值对比图
 plt.figure(figsize=(12, 6))
 plt.plot(y_test, label="Actual Values")
 plt.plot(predictions, label="Predicted Values", linestyle="--")
@@ -225,4 +206,6 @@ plt.title("Actual vs Predicted Values")
 plt.xlabel("Sample Index")
 plt.ylabel("Value")
 plt.legend()
+plt.grid()
 plt.show()
+
