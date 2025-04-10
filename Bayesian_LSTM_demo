@@ -148,6 +148,7 @@ print(optimizer.max)
 
 # Extract the best parameters for use in the final model.
 best_params = optimizer.max['params']
+best_layers = int(best_params['num_layers'])
 best_units = int(best_params['units'])
 best_learning_rate = best_params['learning_rate']
 best_batch_size = int(best_params['batch_size'])
@@ -199,7 +200,7 @@ def build_lstm_model(input_shape, num_layers, units, learning_rate):
 # In case you want to use it, you would do:
 final_model = build_lstm_model(
     (X_train.shape[1], X_train.shape[2]),
-    num_layers=int(optimizer.max['params']['num_layers']),
+    num_layers=best_layers,
     units=best_units,
     learning_rate=best_learning_rate
 )
